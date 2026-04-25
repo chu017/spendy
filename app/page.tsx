@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { CATALOG, CATEGORIES, CATEGORY_COLOR, type CatalogTool, type ToolCategory } from "@/lib/catalog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -72,12 +73,17 @@ function humanName(s: string) {
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar({ todaySpend, runCount }: { todaySpend: number; runCount: number }) {
-  const nav = [
-    { icon: "▣", label: "Dashboard",       active: true  },
-    { icon: "⇄", label: "Compare Budgets", active: false },
-    { icon: "◫", label: "Tool Library",    active: false },
-    { icon: "◎", label: "Settings",        active: false },
+type AppView = "run" | "library";
+
+function Sidebar({
+  todaySpend, runCount, view, setView,
+}: {
+  todaySpend: number; runCount: number; view: AppView; setView: (v: AppView) => void;
+}) {
+  const nav: { icon: string; label: string; id: AppView | null }[] = [
+    { icon: "▣", label: "Dashboard",    id: "run"     },
+    { icon: "◫", label: "Tool Library", id: "library" },
+    { icon: "◎", label: "Settings",     id: null      },
   ];
 
   // Fake sparkline data that grows with todaySpend
@@ -101,16 +107,20 @@ function Sidebar({ todaySpend, runCount }: { todaySpend: number; runCount: numbe
 
       {/* Nav */}
       <nav className="px-3 py-3 space-y-0.5">
-        {nav.map(n => (
-          <div
-            key={n.label}
-            className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] cursor-pointer transition-colors select-none"
-            style={n.active ? { background: "#eef2ff", color: "#4338ca", fontWeight: 600 } : { color: "#64748b" }}
-          >
-            <span className="text-base leading-none">{n.icon}</span>
-            {n.label}
-          </div>
-        ))}
+        {nav.map(n => {
+          const active = n.id === view;
+          return (
+            <div
+              key={n.label}
+              onClick={() => n.id && setView(n.id)}
+              className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] cursor-pointer transition-colors select-none"
+              style={active ? { background: "#eef2ff", color: "#4338ca", fontWeight: 600 } : { color: "#64748b" }}
+            >
+              <span className="text-base leading-none">{n.icon}</span>
+              {n.label}
+            </div>
+          );
+        })}
       </nav>
 
       {/* Today's spend */}
@@ -367,11 +377,168 @@ function Stars({ count, total = 4 }: { count: number; total?: number }) {
   );
 }
 
+// ─── Tool Library view ───────────────────────────────────────────────────────
+
+function ToolLibraryView() {
+  const [activeCategory, setActiveCategory] = useState<ToolCategory | "all">("all");
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const filtered = activeCategory === "all"
+    ? CATALOG
+    : CATALOG.filter(t => t.category === activeCategory);
+
+  const copySnippet = (tool: CatalogTool) => {
+    const snippet = `import { REGISTRY } from "@/lib/registry";\n\nconst result = await REGISTRY.${tool.name}.execute({ /* input */ });`;
+    navigator.clipboard.writeText(snippet);
+    setCopied(tool.name);
+    setTimeout(() => setCopied(null), 1800);
+  };
+
+  const integrationSnippet = `import { withBudget } from "@/lib/with-budget";
+import { REGISTRY } from "@/lib/registry";
+
+const result = await withBudget(
+  async (ctx) => {
+    const search = await ctx.call("web_search", { query: task });
+    const answer = await ctx.call("llm_balanced", { prompt: search });
+    return answer;
+  },
+  {
+    budget: 0.02,
+    tools: [REGISTRY.web_search, REGISTRY.llm_balanced],
+  }
+);
+
+console.log(result.spent, result.remaining);`;
+
+  const adapterSnippet = `import Anthropic from "@anthropic-ai/sdk";
+import { SpendyAnthropicAdapter } from "@/lib/adapters/anthropic";
+import { REGISTRY } from "@/lib/registry";
+
+const agent = new SpendyAnthropicAdapter(new Anthropic(), {
+  budget: 0.02,
+  tools: [REGISTRY.web_search, REGISTRY.llm_balanced],
+  model: "claude-sonnet-4-6",
+});
+
+const { content, spent } = await agent.run("Summarise the EV market");`;
+
+  return (
+    <div className="space-y-5 animate-fade-in-up">
+      {/* Category filter */}
+      <div className="flex gap-2 flex-wrap">
+        {CATEGORIES.map(c => (
+          <button
+            key={c.id}
+            onClick={() => setActiveCategory(c.id)}
+            className="text-xs px-3 py-1.5 rounded-full border cursor-pointer transition-all"
+            style={activeCategory === c.id
+              ? { background: "#6366f1", borderColor: "#6366f1", color: "#fff" }
+              : { borderColor: "#e2e8f0", color: "#64748b" }}
+          >
+            {c.label}
+            <span className="ml-1.5 opacity-50 text-[10px]">
+              {c.id === "all" ? CATALOG.length : CATALOG.filter(t => t.category === c.id).length}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Tool grid */}
+      <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
+        {filtered.map((tool, i) => {
+          const catColor = CATEGORY_COLOR[tool.category];
+          const score    = +(tool.value / tool.cost).toFixed(0);
+          return (
+            <div
+              key={tool.name}
+              className="animate-scale-in rounded-xl border border-slate-200 bg-white p-4 flex flex-col gap-3"
+              style={{ animationDelay: `${i * 40}ms` }}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <span
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-full mb-1.5 inline-block"
+                    style={{ background: catColor.bg, color: catColor.text }}
+                  >
+                    {tool.category}
+                  </span>
+                  <p className="text-[13px] font-bold text-slate-800">{tool.label}</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">{tool.provider}</p>
+                </div>
+                <button
+                  onClick={() => copySnippet(tool)}
+                  className="shrink-0 text-[10px] px-2 py-1 rounded-lg border border-slate-200 text-slate-400 hover:border-indigo-300 hover:text-indigo-500 cursor-pointer transition-all"
+                >
+                  {copied === tool.name ? "✓" : "copy"}
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-500">{tool.description}</p>
+
+              <div className="flex gap-1.5 flex-wrap mt-auto">
+                <Chip label="cost"  value={fmtShort(tool.cost)} color="#3b82f6" />
+                <Chip label="value" value={tool.value.toFixed(1)} color="#a855f7" />
+                <Chip
+                  label="score"
+                  value={String(score)}
+                  color="#f59e0b"
+                  tooltip={`score = value(${tool.value}) ÷ cost(${tool.cost}) = ${score}`}
+                />
+              </div>
+
+              <p className="text-[10px] text-slate-400 pt-1 border-t border-slate-100"
+                 style={{ fontFamily: mono }}>
+                {tool.pricingNote}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Integration code snippets */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <CodeCard title="withBudget — one-line wrapper" code={integrationSnippet} />
+        <CodeCard title="SpendyAnthropicAdapter — drop into Claude tool-use" code={adapterSnippet} />
+      </div>
+    </div>
+  );
+}
+
+function CodeCard({ title, code }: { title: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-100 bg-slate-50">
+        <p className="text-[11px] font-semibold text-slate-600">{title}</p>
+        <button
+          onClick={copy}
+          className="text-[10px] px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-400 hover:text-indigo-500 hover:border-indigo-300 cursor-pointer transition-all"
+        >
+          {copied ? "✓ copied" : "copy"}
+        </button>
+      </div>
+      <pre
+        className="p-4 text-[11px] leading-relaxed overflow-x-auto text-slate-700"
+        style={{ fontFamily: mono }}
+      >
+        {code}
+      </pre>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function SpendyPage() {
   const [task, setTask]             = useState("Analyse an investment opportunity in the renewable energy sector");
   const [budget, setBudget]         = useState(0.008);
+  const [view, setView]             = useState<AppView>("run");
   const [plan, setPlan]             = useState<AgentPlan | null>(null);
   const [phase, setPhase]           = useState<Phase>("idle");
   const [visibleTrace, setVisible]  = useState(0);
@@ -429,16 +596,20 @@ export default function SpendyPage() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden" style={{ fontFamily: "var(--font-geist-sans)" }}>
-      <Sidebar todaySpend={todaySpend} runCount={recentRuns.length} />
+      <Sidebar todaySpend={todaySpend} runCount={recentRuns.length} view={view} setView={setView} />
 
       {/* ── Main content ─────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {/* Header */}
         <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-bold text-slate-900">New Run</h1>
+            <h1 className="text-lg font-bold text-slate-900">
+              {view === "run" ? "New Run" : "Tool Library"}
+            </h1>
             <p className="text-xs text-slate-400 mt-0.5">
-              Enter your task, pick a budget — Spendy will take care of the rest
+              {view === "run"
+                ? "Enter your task, pick a budget — Spendy will take care of the rest"
+                : `${CATALOG.length} tools available · real pricing · drop-in execute() stubs`}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -463,6 +634,8 @@ export default function SpendyPage() {
         </header>
 
         <div className="p-6 space-y-5">
+          {view === "library" && <ToolLibraryView />}
+          {view === "run" && <div>
           {/* ── 3-column layout ───────────────────────────────────────────────── */}
           <div className="grid grid-cols-[270px_1fr_260px] gap-4 items-start">
 
@@ -747,6 +920,7 @@ export default function SpendyPage() {
               )}
             </div>
           </div>
+          </div>}
         </div>
       </div>
     </div>
